@@ -1,0 +1,23 @@
+{
+  "model_name_or_path": "nferruz/ProtGPT2",
+  "ckpt_path": "cpp_soft_prompt_model_active_learning.pt",
+  "device": "cuda",
+  "seed": 42,
+  "cell_line": null,
+  "total_random": 3500,
+  "num_per_cell_line": 1,
+  "gen_batch_size": 32,
+  "prompt_text": "",
+  "add_bos_eos": true,
+  "max_new_tokens": 50,
+  "temperature": 1.0,
+  "top_k": 50,
+  "top_p": 1.0,
+  "num_return_sequences": 1,
+  "repetition_penalty": 1.1,
+  "no_repeat_ngram_size": 0,
+  "out_dir": "runs_gen",
+  "run_name": "generated_cpp_sequences_multi_line_active_learning_3500_ends_no_overlap_seed_temp_1_rep_1_1",
+  "save_csv": true,
+  "save_jsonl": false
+}

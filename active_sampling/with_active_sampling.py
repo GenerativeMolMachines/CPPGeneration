@@ -1,6 +1,6 @@
 import numpy as np
 import pandas as pd
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from typing import List, Tuple, Optional, Dict
 
 from sklearn.model_selection import train_test_split, StratifiedKFold
@@ -9,9 +9,14 @@ from sklearn.calibration import CalibratedClassifierCV
 from sklearn.metrics import precision_recall_curve, precision_score, recall_score, f1_score, average_precision_score
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import pairwise_distances
-from sklearn.base import clone
 from sklearn.cluster import KMeans
 import joblib
+import json
+from pathlib import Path
+import os
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent 
+os.chdir(PROJECT_ROOT)
 
 # -----------------------------
 # Configuration
@@ -20,49 +25,38 @@ import joblib
 class Config:
     random_state: int = 42
     test_size: float = 0.2
-    val_size: float = 0.2  # fraction of the remaining part after test split
+    val_size: float = 0.2  # fraction of the full dataset reserved for validation
     target_precision: float = 0.95
     min_positive_preds_on_val: int = 5  # to avoid an "empty" threshold
     # Batch sampling quotas (fractions of B)
-    quota_pos_div: float = 0.50
-    quota_hard_pos: float = 0.15
-    quota_neg_hard: float = 0.25
-    quota_neg: float = 0.35
-    quota_margin: float = 0.10
+    core_set_ratio: float = 0.7
+    hard_neg_ratio: float = 0.2
+    n_clusters_per_class: int = 10
     hard_neg_top_quantile: float = 0.25  # among negatives, take top-q by proba as hard-neg candidates
-    hard_pos_bottom_quantile: float = 0.25
-    # Budgets (covering the entire selected training subset)
-    budgets: List[int] = None  # will be set below
+    # Budgets 
+    budgets: List[int] = None 
     # OOF
     oof_cv: int = 5
     oof_n_estimators: int = 400  # lightweight model for OOF estimates
     # Calibration
     calibr_cv: int = 5
     calibr_method: str = 'isotonic'
-    # Diversification
-    use_rf_distance: bool = False  # default: Euclidean on standardized features
-    # For RF-proximity (if enabled)
-    prox_rf_n_estimators: int = 300
-    prox_rf_max_depth: Optional[int] = 20
 
     def __post_init__(self):
         if self.budgets is None:
-            # Start with 200 and increase gradually
-            self.budgets = [200, 300, 400, 500, 600, 800, 1000]
+            self.budgets = [100, 200, 300, 400, 500, 600, 800, 1000]
 
 # -----------------------------
 # Helper functions
 # -----------------------------
-def stratified_train_val_test_split(X, y, test_size=0.2, val_size=0.2, random_state=42):
-    X_trainval, X_test, y_trainval, y_test = train_test_split(
-        X, y, test_size=test_size, stratify=y, random_state=random_state
-    )
-    # val_size is a fraction of trainval
-    val_rel_size = val_size / (1.0 - test_size)
-    X_train, X_val, y_train, y_val = train_test_split(
-        X_trainval, y_trainval, test_size=val_rel_size, stratify=y_trainval, random_state=random_state
-    )
-    return X_train, y_train, X_val, y_val, X_test, y_test
+def load_rf_params(config_path: str = "rf_model_config.json") -> Dict:
+    with open(config_path, "r", encoding="utf-8") as f:
+        cfg = json.load(f)
+
+    if "rf_params_final" not in cfg:
+        raise KeyError(f"'rf_params_final' not found in {config_path}")
+
+    return cfg["rf_params_final"]
 
 def compute_oof_probas(X, y, base_rf_params: Dict, cv=5, n_estimators_override: Optional[int]=None, random_state=42) -> np.ndarray:
     """OOF probability estimates for the positive class on the training pool."""
@@ -83,14 +77,13 @@ def compute_embedding_for_diversity(X: np.ndarray) -> Tuple[np.ndarray, Standard
     Z = scaler.fit_transform(X)
     return Z, scaler
 
-def k_center_greedy(embedding: np.ndarray, candidate_idx: np.ndarray, k: int, random_state: int = 42) -> List[int]:
+def k_center_greedy(embedding: np.ndarray, candidate_idx: np.ndarray, k: int) -> List[int]:
     """Farthest-first k-center selection of indices from candidate_idx using embedding (Euclidean)."""
     if k <= 0 or len(candidate_idx) == 0:
         return []
     if len(candidate_idx) <= k:
         return candidate_idx.tolist()
 
-    rng = np.random.RandomState(random_state)
     C = candidate_idx
     E = embedding[C]
 
@@ -111,28 +104,6 @@ def k_center_greedy(embedding: np.ndarray, candidate_idx: np.ndarray, k: int, ra
         min_dist = np.minimum(min_dist, new_d)
 
     return selected
-
-def find_threshold_for_precision(y_true: np.ndarray, proba: np.ndarray, target_precision: float, min_pos: int = 1) -> Tuple[Optional[float], Dict]:
-    """Find threshold with precision >= target_precision and maximum recall. Returns (threshold, metrics)."""
-    precision, recall, thresholds = precision_recall_curve(y_true, proba)
-    # thresholds has length len(precision)-1
-    valid = np.where(precision[:-1] >= target_precision)[0]
-    if len(valid) == 0:
-        return None, {'precision': None, 'recall': None, 'f1': None, 'ap': average_precision_score(y_true, proba)}
-    # among valid thresholds, select the one with maximum recall
-    best_idx = valid[np.argmax(recall[valid])]
-    thr = thresholds[best_idx]
-
-    y_pred = (proba >= thr).astype(int)
-    # if too few positive predictions, consider the threshold inapplicable
-    if y_pred.sum() < min_pos:
-        return None, {'precision': None, 'recall': None, 'f1': None, 'ap': average_precision_score(y_true, proba)}
-
-    prec = precision_score(y_true, y_pred, zero_division=0)
-    rec = recall_score(y_true, y_pred, zero_division=0)
-    f1 = f1_score(y_true, y_pred, zero_division=0)
-    ap = average_precision_score(y_true, proba)
-    return float(thr), {'precision': prec, 'recall': rec, 'f1': f1, 'ap': ap}
 
 def find_threshold_for_precision_max_f1(y_true, proba, target_precision, min_pos=1):
     precision, recall, thresholds = precision_recall_curve(y_true, proba)
@@ -161,125 +132,10 @@ def find_threshold_for_precision_max_f1(y_true, proba, target_precision, min_pos
         'ap': average_precision_score(y_true, proba)
     }
 
-def select_subset_indices(
-    X_pool: np.ndarray,
-    y_pool: np.ndarray,
-    oof_proba: np.ndarray,
-    B: int,
-    embedding: np.ndarray,
-    quota_pos: float = 0.55,
-    quota_neg: float = 0.35,
-    quota_margin: float = 0.10,
-    hard_neg_top_quantile: float = 0.30,
-    random_state: int = 42
-) -> np.ndarray:
-    """Select training subset indices of size B: diversified positives + hard negatives + margin samples."""
-    n = len(y_pool)
-    B_pos = int(round(B * quota_pos))
-    B_neg = int(round(B * quota_neg))
-    B_margin = max(0, B - B_pos - B_neg)
-
-    # Positives: diversification
-    pos_idx = np.where(y_pool == 1)[0]
-    sel_pos = k_center_greedy(embedding, pos_idx, min(B_pos, len(pos_idx)), random_state=random_state)
-
-    # Negatives: hard negatives by high oof_proba among negatives + diversification
-    neg_idx = np.where(y_pool == 0)[0]
-    if len(neg_idx) > 0 and B_neg > 0:
-        neg_sorted = neg_idx[np.argsort(-oof_proba[neg_idx])]
-        top_k = max(1, int(len(neg_idx) * hard_neg_top_quantile))
-        neg_candidates = neg_sorted[:top_k]
-        neg_candidates = np.setdiff1d(neg_candidates, sel_pos, assume_unique=False)
-        sel_neg = k_center_greedy(embedding, neg_candidates, min(B_neg, len(neg_candidates)), random_state=random_state+1)
-    else:
-        sel_neg = []
-
-    # Margin: minimum |p - 0.5| regardless of class + diversification
-    if B_margin > 0:
-        margin = np.abs(oof_proba - 0.5)
-        order = np.argsort(margin)  # from most uncertain
-        # take top-(3*B_margin) candidates to allow diversification
-        k_cand = min(len(order), max(B_margin * 3, B_margin))
-        marg_candidates = order[:k_cand]
-        already = np.array(sel_pos + sel_neg, dtype=int)
-        marg_candidates = np.setdiff1d(marg_candidates, already, assume_unique=False)
-        sel_marg = k_center_greedy(embedding, marg_candidates, min(B_margin, len(marg_candidates)), random_state=random_state+2)
-    else:
-        sel_marg = []
-
-    selected = list(dict.fromkeys(sel_pos + sel_neg + sel_marg))  # deduplicate preserving order
-
-    # If fewer than B selected — fill up with diversification from the remaining
-    if len(selected) < B:
-        remaining = np.setdiff1d(np.arange(n), np.array(selected, dtype=int), assume_unique=False)
-        extra = k_center_greedy(embedding, remaining, B - len(selected), random_state=random_state+3)
-        selected.extend(extra)
-
-    return np.array(selected[:B], dtype=int)
-
-def select_subset_indices_v2(
-    X_pool, y_pool, oof_proba, B, embedding,
-    quota_pos_div=0.50, quota_hard_pos=0.15, quota_neg_hard=0.25, quota_margin=0.10,
-    hard_neg_top_quantile=0.25, hard_pos_bottom_quantile=0.25, random_state=42
-):
-    n = len(y_pool)
-    B_pos_div = int(round(B * quota_pos_div))
-    B_hpos    = int(round(B * quota_hard_pos))
-    B_hneg    = int(round(B * quota_neg_hard))
-    B_margin  = max(0, B - B_pos_div - B_hpos - B_hneg)
-
-    # 1) Hard-positives: y=1 with low predicted probability
-    pos_idx = np.where(y_pool == 1)[0]
-    if len(pos_idx) > 0 and B_hpos > 0:
-        pos_sorted_asc = pos_idx[np.argsort(oof_proba[pos_idx])]  # ascending by probability
-        k_hp = max(1, int(len(pos_idx) * hard_pos_bottom_quantile))
-        hp_candidates = pos_sorted_asc[:k_hp]
-        sel_hpos = k_center_greedy(embedding, hp_candidates, min(B_hpos, len(hp_candidates)), random_state=random_state+10)
-    else:
-        sel_hpos = []
-
-    # 2) Diversified positives, excluding already selected hard-positives
-    pos_remain = np.setdiff1d(pos_idx, np.array(sel_hpos, dtype=int), assume_unique=False)
-    sel_pos_div = k_center_greedy(embedding, pos_remain, min(B_pos_div, len(pos_remain)), random_state=random_state)
-
-    # 3) Hard negatives: y=0 with high predicted probability
-    neg_idx = np.where(y_pool == 0)[0]
-    if len(neg_idx) > 0 and B_hneg > 0:
-        neg_sorted_desc = neg_idx[np.argsort(-oof_proba[neg_idx])]
-        k_hn = max(1, int(len(neg_idx) * hard_neg_top_quantile))
-        hn_candidates = np.setdiff1d(neg_sorted_desc[:k_hn], np.array(sel_pos_div + sel_hpos, dtype=int), assume_unique=False)
-        sel_hneg = k_center_greedy(embedding, hn_candidates, min(B_hneg, len(hn_candidates)), random_state=random_state+1)
-    else:
-        sel_hneg = []
-
-    # 4) Margin: minimum |p - 0.5|
-    selected_so_far = np.array(sel_hpos + sel_pos_div + sel_hneg, dtype=int)
-    if B_margin > 0:
-        margin = np.abs(oof_proba - 0.5)
-        order = np.argsort(margin)
-        k_cand = min(len(order), max(B_margin * 3, B_margin))
-        marg_candidates = np.setdiff1d(order[:k_cand], selected_so_far, assume_unique=False)
-        sel_marg = k_center_greedy(embedding, marg_candidates, min(B_margin, len(marg_candidates)), random_state=random_state+2)
-    else:
-        sel_marg = []
-
-    selected = list(dict.fromkeys(sel_hpos + sel_pos_div + sel_hneg + sel_marg))
-
-    # fill up to B if needed
-    if len(selected) < B:
-        remaining = np.setdiff1d(np.arange(n), np.array(selected, dtype=int), assume_unique=False)
-        extra = k_center_greedy(embedding, remaining, B - len(selected), random_state=random_state+3)
-        selected.extend(extra)
-
-    return np.array(selected[:B], dtype=int)
-
-from sklearn.cluster import KMeans
-
 def select_subset_indices_v3(
     X_pool, y_pool, oof_proba, B, embedding,
-    core_set_ratio=0.7,        # 70% of budget for the "foundation"
-    hard_neg_ratio=0.2,        # 20% for "hard negatives"
-    margin_ratio=0.1,          # 10% for "margin samples"
+    core_set_ratio=0.7,       
+    hard_neg_ratio=0.2,       
     n_clusters_per_class=10,   # number of prototypes per class
     hard_neg_top_quantile=0.25,
     random_state=42
@@ -314,8 +170,7 @@ def select_subset_indices_v3(
                 closest_point_idx = cluster_members[np.argmin(distances[cluster_members, i])]
                 core_pos_indices.append(pos_idx[closest_point_idx])
         
-        # If too few prototypes, fill up with the most diverse remaining samples
-        sel_core_pos = k_center_greedy(embedding, np.array(list(set(core_pos_indices))), B_core_pos, random_state)
+        sel_core_pos = k_center_greedy(embedding, np.array(list(set(core_pos_indices))), B_core_pos)
         selected.extend(sel_core_pos)
 
     # Find prototypes for the negative class (same approach)
@@ -331,7 +186,7 @@ def select_subset_indices_v3(
                 closest_point_idx = cluster_members[np.argmin(distances[cluster_members, i])]
                 core_neg_indices.append(neg_idx[closest_point_idx])
 
-        sel_core_neg = k_center_greedy(embedding, np.array(list(set(core_neg_indices))), B_core_neg, random_state+1)
+        sel_core_neg = k_center_greedy(embedding, np.array(list(set(core_neg_indices))), B_core_neg)
         selected.extend(sel_core_neg)
 
     # --- STAGE 2: REFINEMENT ---
@@ -342,7 +197,7 @@ def select_subset_indices_v3(
         neg_sorted_desc = neg_idx[np.argsort(-oof_proba[neg_idx])]
         k_hn = max(1, int(len(neg_idx) * hard_neg_top_quantile))
         hn_candidates = np.setdiff1d(neg_sorted_desc[:k_hn], already_selected, assume_unique=False)
-        sel_hneg = k_center_greedy(embedding, hn_candidates, min(B_hneg, len(hn_candidates)), random_state=random_state+2)
+        sel_hneg = k_center_greedy(embedding, hn_candidates, min(B_hneg, len(hn_candidates)))
         selected.extend(sel_hneg)
     
     # Margin samples
@@ -352,14 +207,14 @@ def select_subset_indices_v3(
         order = np.argsort(margin)
         k_cand = min(len(order), max(B_margin * 5, B_margin))  # take more candidates for diversification
         marg_candidates = np.setdiff1d(order[:k_cand], already_selected, assume_unique=False)
-        sel_marg = k_center_greedy(embedding, marg_candidates, min(B_margin, len(marg_candidates)), random_state=random_state+3)
+        sel_marg = k_center_greedy(embedding, marg_candidates, min(B_margin, len(marg_candidates)))
         selected.extend(sel_marg)
 
     # Final deduplication and fill-up if needed
     final_selected = list(dict.fromkeys(selected))
     if len(final_selected) < B:
         remaining = np.setdiff1d(np.arange(n), np.array(final_selected, dtype=int))
-        extra = k_center_greedy(embedding, remaining, B - len(final_selected), random_state=random_state+4)
+        extra = k_center_greedy(embedding, remaining, B - len(final_selected))
         final_selected.extend(extra)
         
     return np.array(final_selected[:B], dtype=int)
@@ -420,10 +275,13 @@ def run_active_sampling_pipeline_2(
     X: np.ndarray,
     y: np.ndarray,
     rf_params_final: Dict,
-    config: Config = Config(),
+        config: Optional[Config] = None,
     feature_names: Optional[List[str]] = None,
-    artifacts_path: Optional[str] = None
+    artifacts_path: Optional[str] = None,
 ):
+    if config is None:
+        config = Config()
+
     rs = config.random_state
     # 0) Index-based splits → then extract arrays
     idx_pool, idx_val, idx_test = stratified_train_val_test_indices(
@@ -453,11 +311,10 @@ def run_active_sampling_pipeline_2(
         # 2a) Select subset indices of size B
         sel_idx = select_subset_indices_v3(
             X_pool, y_pool, oof_proba, B, embedding,
-            core_set_ratio=0.7, 
-            hard_neg_ratio=0.2,
-            margin_ratio=0.1,  
-            n_clusters_per_class=10,
-            hard_neg_top_quantile=0.25,
+            core_set_ratio=config.core_set_ratio, 
+            hard_neg_ratio=config.hard_neg_ratio,
+            n_clusters_per_class=config.n_clusters_per_class,
+            hard_neg_top_quantile=config.hard_neg_top_quantile,
             random_state=rs
         )
         X_sub, y_sub = X_pool[sel_idx], y_pool[sel_idx]
@@ -557,18 +414,9 @@ def run_active_sampling_pipeline_2(
 # Example usage
 # -----------------------------
 if __name__ == "__main__":
-    # Assume X (np.ndarray, shape [n_samples, 18]) and y (np.ndarray, shape [n_samples], 0/1) are already available
-    # X, y = ...  # load your data here
 
-    rf_params_final = dict(
-        n_estimators=1200,
-        max_depth=30,
-        min_samples_split=6,
-        min_samples_leaf=2,
-        max_features='log2',
-        bootstrap=False,
-        class_weight='balanced_subsample'
-    )
+    rf_params_final = load_rf_params("config/rf_model_config.json")
+    print("Loaded rf_params_final:", rf_params_final)
 
     cfg = Config(
         random_state=42,
@@ -576,23 +424,20 @@ if __name__ == "__main__":
         val_size=0.2,
         target_precision=0.90,
         min_positive_preds_on_val=5,
-        quota_pos_div=0.50,
-        quota_hard_pos=0.15,
-        quota_neg_hard=0.25,
-        quota_neg=0.25,
-        quota_margin=0.10,
+        core_set_ratio=0.7,  # 70% of budget for the "foundation"
+        hard_neg_ratio=0.2,  # 20% for "hard negatives"
+        # the remaining budget automatically goes to "margin samples" 
+        n_clusters_per_class=10,
         hard_neg_top_quantile=0.25,
-        hard_pos_bottom_quantile=0.25,
-        budgets=[500, 600, 800, 1000],
+        budgets=[100, 200, 300, 400, 500, 600, 800, 1000],
         oof_cv=5,
         oof_n_estimators=400,   
         calibr_cv=5,
         calibr_method='isotonic',
-        use_rf_distance=False   
     )
 
     # Run the pipeline
-    df_ready = pd.read_csv("input_data/clean_peptides_for_classification_descriptors_with_id.csv")
+    df_ready = pd.read_csv("data/processed/peptides_for_classification_active_sampling.csv")
     columns_to_use = [
         'seq_length', 'molecular_weight', 'nh3_tail', 'po3_pos',
         'biotinylated', 'acylated_n_terminal', 'cyclic', 'amidated',
@@ -601,12 +446,25 @@ if __name__ == "__main__":
         'turn_fraction', 'sheet_fraction', 'molar_extinction_coefficient_reduced',
         'molar_extinction_coefficient_oxidized', 'gravy'
     ]
-    artifacts_path = "classifier_artifacts_active_learning.joblib"
+    artifacts_path = "models/classifier_artifacts_active_learning.joblib"
     X = df_ready[columns_to_use].to_numpy()
     y = df_ready['is_cpp'].to_numpy()
-    results = run_active_sampling_pipeline_2(X, y, rf_params_final, cfg,
-        feature_names=columns_to_use, artifacts_path=artifacts_path)
+    results = run_active_sampling_pipeline_2(
+        X, y,
+        rf_params_final=rf_params_final,
+        config=cfg,
+        feature_names=columns_to_use,
+        artifacts_path=artifacts_path
+    )
     print("Best solution:", results['best'])
+
+    active_config_path = Path("config/active_learning_config.json")
+
+    with active_config_path.open("w", encoding="utf-8") as f:
+        json.dump(asdict(cfg), f, ensure_ascii=False, indent=2)
+
+    print(f"Active learning config saved to: {active_config_path.resolve()}")
+    print(json.dumps(asdict(cfg), ensure_ascii=False, indent=2))
 
     best = results['best']
     if best and 'selected_global_indices' in best:
@@ -619,7 +477,7 @@ if __name__ == "__main__":
         train_ids = df_ready.iloc[sel_global]['id'].values
 
         # 2) Load the original (unprocessed) dataset all.csv
-        all_path = "input_data/all_peptides_for_classification.csv"  # adjust path if needed
+        all_path = "data/raw/all_peptides.csv" 
         all_df = pd.read_csv(all_path)
         if 'id' not in all_df.columns:
             raise KeyError(f"Column 'id' not found in {all_path}. Cannot remove rows by id.")
@@ -635,15 +493,10 @@ if __name__ == "__main__":
         print(f"Rows to be removed: {removed} out of {before} (by id).")
 
         # 4) Save the cleaned dataset
-        out_path = "input_data/peptides_without_train_rows.csv"  # output file
+        out_path = "data/active_sampling/peptides_without_classifier_train_rows.csv"
         cleaned_df.to_csv(out_path, index=False)
         print(f"Cleaned dataset saved: {out_path} | shape={cleaned_df.shape}")
 
-        # (optional) Save the training rows from all.csv for audit purposes
-        # train_rows_path = "input_data/all_train_rows_only_by_id.csv"
-        # all_df[all_df['id'].isin(train_ids)].to_csv(train_rows_path, index=False)
-        # print(f"Training rows saved (for audit): {train_rows_path}")
-
     else:
-        print("Warning: cannot remove train rows from all.csv (no selected_global_indices in results['best']).")
+        print("Warning: cannot remove train rows from all_peptides.csv (no selected_global_indices in results['best']).")
     pass

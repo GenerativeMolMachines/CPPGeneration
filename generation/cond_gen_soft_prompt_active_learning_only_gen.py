@@ -217,7 +217,7 @@ def parse_args():
     # Model/ckpt
     p.add_argument("--model_name_or_path", type=str, default="nferruz/ProtGPT2",
                    help="HF model name or local path")
-    p.add_argument("--ckpt_path", type=str, default="cpp_soft_prompt_model_active_learning.pt",
+    p.add_argument("--ckpt_path", type=str, default="models/cpp_soft_prompt_model_active_learning.pt",
                    help="Path to trained soft-prompt checkpoint (.pt)")
     p.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--seed", type=int, default=42)

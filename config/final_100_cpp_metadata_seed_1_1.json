@@ -1,0 +1,28 @@
+{
+  "target_cpp_per_line": 100,
+  "iterations": 2,
+  "total_sequences": 1200,
+  "generation_params": {
+    "temperature": 1.0,
+    "repetition_penalty": 1.1,
+    "min_aa_length": 7,
+    "max_aa_length": 22,
+    "gen_batch_size": 32,
+    "ckpt_path": "cpp_soft_prompt_model_active_learning.pt"
+  },
+  "per_line_counts": {
+    "A549 cells": 100,
+    "CHO cells": 100,
+    "CHO-K1 cells": 100,
+    "HEK293 cells": 100,
+    "HaCaT cells": 100,
+    "HeLa cells": 100,
+    "Human bowes melanoma cells": 100,
+    "MCF7 cells": 100,
+    "MDA-MB-231 cells": 100,
+    "NIH-3T3 cells": 100,
+    "U87 cells": 100,
+    "other": 100
+  },
+  "seed": 42
+}

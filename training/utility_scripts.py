@@ -29,34 +29,48 @@ def plot_confusion_matrix(y_true, y_pred, labels, title='Confusion Matrix'):
     plt.title(title)
     plt.show()
 
-def preprocess_descriptors(
-    df: pd.DataFrame, 
-    target_column: str = 'is_cpp', 
-    columns_to_use: Optional[List[str]] = None, 
-    test_size: float = 0.2, 
-    random_state: int = 42, 
-    stratify: bool = True
-) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
+def prepare_descriptors_dataframe(
+    df: pd.DataFrame,
+    target_column: str = 'is_cpp',
+    feature_columns: Optional[List[str]] = None,
+    id_column: Optional[str] = None,
+    strict_columns: bool = True
+) -> pd.DataFrame:
     """
-    Preprocesses the data by selecting specified columns, encoding categorical variables,
-    splitting into train and test sets, and asserting no missing values.
+    Prepare a descriptor-based dataframe for downstream tasks.
 
-    Parameters:
-    df (pd.DataFrame): The input dataframe.
-    target_column (str): The name of the target column.
-    columns_to_use (list): List of columns to use. If None, default columns will be used.
-    test_size (float): Proportion of the dataset to include in the test split.
-    random_state (int): Random seed for reproducibility.
-    stratify (bool): Whether to stratify the split based on the target column.
+    This function:
+      - selects the requested feature columns,
+      - optionally keeps an id column,
+      - converts boolean columns to int,
+      - encodes the target column to 0/1 using LabelEncoder,
+      - checks that there are no missing values.
 
-    Returns:
-    X_train (pd.DataFrame): Training feature matrix.
-    X_test (pd.DataFrame): Testing feature matrix.
-    y_train (pd.Series): Training target vector.
-    y_test (pd.Series): Testing target vector.
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input dataframe.
+    target_column : str, default='is_cpp'
+        Target column name.
+    feature_columns : list[str] or None
+        Feature columns to use.
+    id_column : str or None
+        Optional id column to keep in the output dataframe.
+        This column is preserved for matching rows later, but should not be used as a model feature.
+    strict_columns : bool, default=True
+        If True, raises an error when required columns are missing.
+        If False, uses only available columns and prints a warning.
+
+    Returns
+    -------
+    pd.DataFrame
+        Preprocessed dataframe containing:
+          - optional id column,
+          - selected feature columns,
+          - encoded target column.
     """
-    if columns_to_use is None:
-        columns_to_use = [
+    if feature_columns is None:
+        feature_columns = [
             'seq_length', 'molecular_weight', 'nh3_tail', 'po3_pos', 
             'biotinylated', 'acylated_n_terminal', 'cyclic', 'amidated', 
             'stearyl_uptake', 'hexahistidine_tagged', 'aromaticity', 
@@ -64,39 +78,111 @@ def preprocess_descriptors(
             'turn_fraction', 'sheet_fraction', 'molar_extinction_coefficient_reduced', 
             'molar_extinction_coefficient_oxidized', 'gravy'
         ]
-    
-    # Select specified columns
-    df_clean = df[columns_to_use + [target_column]]
-    
-    # Encode boolean columns
+
+    required_columns = feature_columns.copy()
+    if id_column is not None:
+        required_columns = [id_column] + required_columns
+
+    missing = [c for c in required_columns + [target_column] if c not in df.columns]
+    if missing:
+        if strict_columns:
+            raise ValueError(f"Missing columns in dataframe: {missing}")
+        else:
+            print(f"[WARN] Missing columns in dataframe: {missing}. Only available columns will be used.")
+            required_columns = [c for c in required_columns if c in df.columns]
+            if target_column not in df.columns:
+                raise ValueError(f"Target column '{target_column}' is missing from dataframe.")
+
+    # Explicit copy to avoid SettingWithCopyWarning
+    df_clean = df.loc[:, required_columns + [target_column]].copy()
+
+    # Convert boolean columns to int
     bool_cols = df_clean.columns[df_clean.dtypes == 'bool'].tolist()
     for col in bool_cols:
-        df_clean[col] = df_clean[col].astype(int)
-    
-    # Encode target variable
+        df_clean.loc[:, col] = df_clean[col].astype(int)
+
+    # Encode target to 0/1
     label_encoder = LabelEncoder()
-    df_clean[target_column] = label_encoder.fit_transform(df_clean[target_column])
-    
-    # Define features and target
-    X = df_clean.drop(target_column, axis=1)
-    y = df_clean[target_column]
-    
-    # Assert no missing values
-    assert X.isnull().sum().sum() == 0, "There are missing values in the feature matrix"
-    assert y.isnull().sum() == 0, "There are missing values in the target vector"
-    
-    # Split the data
-    stratify_param = y if stratify else None
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=test_size, random_state=random_state, stratify=stratify_param
+    df_clean.loc[:, target_column] = label_encoder.fit_transform(df_clean[target_column])
+
+    # Check missing values in features and target
+    feature_part = df_clean.drop(columns=[target_column])
+    target_part = df_clean[target_column]
+
+    assert feature_part.isnull().sum().sum() == 0, "There are missing values in the feature matrix"
+    assert target_part.isnull().sum() == 0, "There are missing values in the target vector"
+
+    print(
+        f"Prepared dataframe shape: {df_clean.shape} | "
+        f"features: {len([c for c in df_clean.columns if c not in [target_column, id_column]])} | "
+        f"id included: {id_column is not None}"
     )
 
-    # Print the shapes of the resulting dataframes
+    return df_clean
+
+def preprocess_descriptors(
+    df: pd.DataFrame,
+    target_column: str = 'is_cpp',
+    columns_to_use: Optional[List[str]] = None,
+    test_size: float = 0.2,
+    random_state: int = 42,
+    stratify: bool = True,
+    strict_columns: bool = True
+) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
+    """
+    Preprocess descriptor data and split it into train/test subsets.
+
+    This is a wrapper around prepare_descriptors_dataframe(...).
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input dataframe.
+    target_column : str, default='is_cpp'
+        Target column name.
+    columns_to_use : list[str] or None
+        Feature columns to use.
+    test_size : float, default=0.2
+        Proportion of the dataset included in the test split.
+    random_state : int, default=42
+        Random seed for reproducibility.
+    stratify : bool, default=True
+        Whether to stratify the split by the target column.
+    strict_columns : bool, default=True
+        If True, raises an error when expected columns are missing.
+
+    Returns
+    -------
+    X_train : pd.DataFrame
+    X_test : pd.DataFrame
+    y_train : pd.Series
+    y_test : pd.Series
+    """
+    df_prepared = prepare_descriptors_dataframe(
+        df=df,
+        target_column=target_column,
+        feature_columns=columns_to_use,
+        id_column=None,
+        strict_columns=strict_columns
+    )
+
+    X = df_prepared.drop(columns=[target_column])
+    y = df_prepared[target_column]
+
+    stratify_param = y if stratify else None
+    X_train, X_test, y_train, y_test = train_test_split(
+        X,
+        y,
+        test_size=test_size,
+        random_state=random_state,
+        stratify=stratify_param
+    )
+
     print(f"X_train shape: {X_train.shape}")
     print(f"X_test shape: {X_test.shape}")
     print(f"y_train shape: {y_train.shape}")
     print(f"y_test shape: {y_test.shape}")
-    
+
     return X_train, X_test, y_train, y_test
 
 # Function to calculate evaluation metrics
