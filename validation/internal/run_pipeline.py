@@ -51,8 +51,15 @@ try:
         predict_raw_efficiency)
 except ImportError as e:
     print(f"[ERROR] It was not possible to import the necessary utilities: {e}")
-    print("Make sure that the files 'aligment.py', 'classificator_utils.py' and 'regressor_utils.py' are located in the same directory.")
     sys.exit(1)
+
+    try:
+        from regressor_utils import (PeptideRegressorPreprocessor, predict_raw_efficiency)
+        HAS_REGRESSOR = True
+    except ImportError:
+        HAS_REGRESSOR = False
+        print("[WARN] regressor_utils not found. Efficiency prediction will be skipped.")
+
 
 # --- Configuration ---
 # Placeholder for model version name - easily changeable for each run
@@ -60,7 +67,7 @@ MODEL_VERSION_NAME = "my_finetuned_protgpt2_v1"
 
 # Paths to input files
 GENERATED_SEQUENCES_FILE = "log_generation_cpp_2.txt" # File with generated sequences
-NATURAL_PEPTIDES_FILE = "cpps_for_generator.csv"     # File with natural peptides
+NATURAL_PEPTIDES_FILE = "data/processed/generation_train_dataset.csv"     # File with natural peptides
 
 # Path to fine-tuned ProtGPT2 model
 PROTGPT2_MODEL_PATH = ""
@@ -79,8 +86,8 @@ SEQUENCE_COLUMN = "sequence"
 METRICS_OUTPUT_DIR_PREFIX = "metrics_"
 ALL_METRICS_CSV = "all_metrics.csv" # Consolidated metrics table
 
-CLASSIFIER_ARTIFACTS_PATH = Path(__file__).resolve().parent / 'models/lassifier_artifacts_active_learning.joblib'
-# REGRESSOR_ARTIFACTS_PATH = Path(__file__).resolve().parent / 'models/peptide_regressor_artifacts.joblib'
+CLASSIFIER_ARTIFACTS_PATH = Path(__file__).resolve().parent.parent.parent / 'models/classifier_artifacts_active_learning.joblib'
+REGRESSOR_ARTIFACTS_PATH = Path(__file__).resolve().parent.parent.parent / 'models/peptide_regressor_artifacts.joblib'
 
 # --- Device Configuration ---
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -229,7 +236,7 @@ def process_soft_prompt_csv_for_lp(generated_csv_file, soft_prompt_model_path, b
         base_model = AutoModelForCausalLM.from_pretrained(base_model_name).to(DEVICE).eval()
         
         print(f"Loading soft-prompt model artifacts from: {soft_prompt_model_path}")
-        artifacts = torch.load(soft_prompt_model_path, map_location=DEVICE)
+        artifacts = torch.load(soft_prompt_model_path, map_location=DEVICE, weights_only=False)
         
         class ConditionPrefixGenerator(nn.Module): # Need to copy the class from the training script
             def __init__(self, cond_dim, prefix_len, embed_dim, hidden=512, dropout=0.0):
@@ -327,7 +334,7 @@ def process_prefix_tuned_csv_for_lp(generated_csv_file, prefix_model_artifacts_p
         
         # 2. Load prefix-generator artifacts
         print(f"Loading prefix-tuned model artifacts from: {prefix_model_artifacts_path}")
-        artifacts = torch.load(prefix_model_artifacts_path, map_location=DEVICE)
+        artifacts = torch.load(prefix_model_artifacts_path, map_location=DEVICE, weights_only=False)
         
         # Define the KVPrefixGenerator class (must match the one used during training)
         class KVPrefixGenerator(nn.Module):
@@ -560,6 +567,10 @@ def run_efficiency_prediction(metrics_csv_path: str) -> float:
     Executes raw_efficiency prediction for CPP peptides and updates files.
     Returns the mean predicted efficiency.
     """
+    if not HAS_REGRESSOR:
+        print("Regressor utilities not available. Skipping efficiency prediction.")
+        return None
+    
     print("\n--- Step Y: Predicting Raw Efficiency for CPPs ---")
     
     # 1. Load artifacts

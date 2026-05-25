@@ -99,7 +99,7 @@ def load_prefix_generator(ckpt_path: str, embed_dim: int, device: str):
     ckpt must contain keys: 'state_dict', 'condition_dim', 'prefix_len', optionally 'cell_line_mapping'
     Hidden size is inferred from state_dict shapes.
     """
-    ckpt = torch.load(ckpt_path, map_location="cpu")
+    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     state_dict = ckpt["state_dict"]
     cond_dim = int(ckpt["condition_dim"])
     prefix_len = int(ckpt["prefix_len"])
