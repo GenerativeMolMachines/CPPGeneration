@@ -1,0 +1,34 @@
+name: cppgen_env
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12.11
+  - pip
+  - pandas=2.2.3
+  - numpy=1.26.4
+  - scipy=1.15.3
+  - scikit-learn=1.6.1
+  - optuna=4.4.0
+  - joblib=1.5.0
+  - rdkit=2025.03.4
+  - biopython=1.85
+  - matplotlib-base=3.10.3
+  - seaborn=0.13.2
+  - plotly=6.3.1
+  - tqdm=4.67.1
+  - pandarallel=1.6.5
+  - pyarrow=20.0.0
+  - pyyaml=6.0.2
+  - requests=2.32.3
+  - regex=2024.11.6
+
+  - pip:
+      - --extra-index-url https://download.pytorch.org/whl/cu124
+      - torch==2.6.0+cu124
+      - torchvision==0.21.0+cu124
+      - torchaudio==2.6.0+cu124
+      - accelerate==1.6.0
+      - huggingface-hub==0.31.1
+      - safetensors==0.5.3
+      - tokenizers==0.21.1
+      - "transformers @ git+https://github.com/huggingface/transformers.git@a5cc7a67d72b2a8e709f793c636b64fe423f71f6"

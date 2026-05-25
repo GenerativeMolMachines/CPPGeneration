@@ -32,7 +32,7 @@ def generate_cpp_dataset(
     target_cpp_per_line=100,
     initial_multiplier=2.5,  # Generate 2.5x more sequences as a buffer
     max_iterations=3,
-    gen_script="cond_gen_soft_prompt_active_learning_only_gen_100.py",
+    gen_script="generation/cond_gen_soft_prompt_active_learning_only_gen_100.py",
     eval_script="validation/internal/run_pipeline.py",
     seed = 42,
     **gen_params

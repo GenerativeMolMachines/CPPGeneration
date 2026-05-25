@@ -1,6 +1,6 @@
 {
   "model_name_or_path": "nferruz/ProtGPT2",
-  "ckpt_path": "cpp_soft_prompt_model_active_learning.pt",
+  "ckpt_path": "models/cpp_soft_prompt_model_active_learning.pt",
   "device": "cuda",
   "seed": 42,
   "cell_line": null,

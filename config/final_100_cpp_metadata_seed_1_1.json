@@ -8,7 +8,7 @@
     "min_aa_length": 7,
     "max_aa_length": 22,
     "gen_batch_size": 32,
-    "ckpt_path": "cpp_soft_prompt_model_active_learning.pt"
+    "ckpt_path": "models/cpp_soft_prompt_model_active_learning.pt"
   },
   "per_line_counts": {
     "A549 cells": 100,

@@ -79,8 +79,8 @@ SEQUENCE_COLUMN = "sequence"
 METRICS_OUTPUT_DIR_PREFIX = "metrics_"
 ALL_METRICS_CSV = "all_metrics.csv" # Consolidated metrics table
 
-CLASSIFIER_ARTIFACTS_PATH = Path(__file__).resolve().parent / 'classifier_artifacts_active_learning.joblib'
-REGRESSOR_ARTIFACTS_PATH = Path(__file__).resolve().parent / 'peptide_regressor_artifacts.joblib'
+CLASSIFIER_ARTIFACTS_PATH = Path(__file__).resolve().parent / 'models/lassifier_artifacts_active_learning.joblib'
+# REGRESSOR_ARTIFACTS_PATH = Path(__file__).resolve().parent / 'models/peptide_regressor_artifacts.joblib'
 
 # --- Device Configuration ---
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
