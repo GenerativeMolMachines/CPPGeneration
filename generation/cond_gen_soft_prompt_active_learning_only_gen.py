@@ -236,14 +236,14 @@ def parse_args():
     p.add_argument("--prompt_text", type=str, default="", help="Optional textual prompt to append after <|endoftext|>")
     p.add_argument("--add_bos_eos", action="store_true", default=True, help="Prepend <|endoftext|> to prompt")
     p.add_argument("--max_new_tokens", type=int, default=50)
-    p.add_argument("--temperature", type=float, default=0.9)
+    p.add_argument("--temperature", type=float, default=1.0)
     p.add_argument("--top_k", type=int, default=50)
     p.add_argument("--top_p", type=float, default=1.0)
     p.add_argument("--num_return_sequences", type=int, default=1,
                    help="Number of samples per condition in one forward pass (used with --cell_line).")
 
     # Repetition control (optional)
-    p.add_argument("--repetition_penalty", type=float, default=1.0, help=">=1.0; 1.0 disables")
+    p.add_argument("--repetition_penalty", type=float, default=1.1, help=">=1.0; 1.0 disables")
     p.add_argument("--no_repeat_ngram_size", type=int, default=0, help="0 disables")
 
     # Output

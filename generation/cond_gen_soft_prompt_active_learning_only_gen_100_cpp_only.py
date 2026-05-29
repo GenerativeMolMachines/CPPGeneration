@@ -67,7 +67,7 @@ def generate_cpp_dataset(
             "--min_aa_length", str(gen_params.get('min_aa_length', 7)),
             "--max_aa_length", str(gen_params.get('max_aa_length', 22)),
             "--temperature", str(gen_params.get('temperature', 1.0)),
-            "--repetition_penalty", str(gen_params.get('repetition_penalty', 1.15)),
+            "--repetition_penalty", str(gen_params.get('repetition_penalty', 1.1)),
             "--gen_batch_size", str(gen_params.get('gen_batch_size', 16)),
         ]
 
@@ -190,7 +190,7 @@ if __name__ == "__main__":
                        help="Initial overgeneration multiplier")
     parser.add_argument("--max_iterations", type=int, default=3)
     parser.add_argument("--temperature", type=float, default=1.0)
-    parser.add_argument("--repetition_penalty", type=float, default=1.15)
+    parser.add_argument("--repetition_penalty", type=float, default=1.1)
     parser.add_argument("--min_aa_length", type=int, default=7)
     parser.add_argument("--max_aa_length", type=int, default=22)
     parser.add_argument("--gen_batch_size", type=int, default=16)
