@@ -195,3 +195,9 @@ conda activate cppgen_env
 - The repository is built around ProtGPT2 and custom soft-prompt conditioning with cell-line metadata.
 - The active sampling module is designed for iterative dataset expansion and classifier-guided selection.
 - Training and generation currently assume a CUDA-enabled environment if available.
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md) file.
+
+This project uses the pre-trained **ProtGPT2** model by Noelia Ferruz, which is also licensed under the MIT License. See [NOTICE.md](NOTICE.md) for details.
